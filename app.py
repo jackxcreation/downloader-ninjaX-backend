@@ -5,9 +5,8 @@ import requests
 from flask import Flask, request, jsonify, send_file, abort
 from flask_cors import CORS
 import yt_dlp
-
-# -- Added --
 import instaloader
+import re  # For better shortcode extraction
 
 app = Flask(__name__)
 CORS(app)
@@ -247,8 +246,12 @@ def ig_photo_dl():
         if not url or "instagram.com/p/" not in url:
             return jsonify({"status": "fail", "error": "Invalid Instagram photo URL."})
 
-        # Extract shortcode from URL
-        shortcode = url.rstrip('/').split('/')[-1]
+        # -- STRONGER shortcode parse (with regex) --
+        match = re.search(r"instagram\.com/p/([^/?#&]+)/?", url)
+        if not match:
+            return jsonify({"status": "fail", "error": "Invalid Instagram post URL or missing shortcode."})
+        shortcode = match.group(1)
+
         L = instaloader.Instaloader(
             download_pictures=False,
             download_video_thumbnails=False,
