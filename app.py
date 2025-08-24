@@ -22,7 +22,7 @@ def get_info():
     if not video_url:
         return jsonify({'error': 'No URL provided.'}), 400
 
-    # Detect platform/cookies
+    # Detect platform and assign respective cookies
     if "youtube.com" in video_url or "youtu.be" in video_url:
         platform = 'youtube'
         cookie_file = 'cookies_youtube.txt'
@@ -59,23 +59,50 @@ def get_info():
             resp = {
                 'title': info.get('title', ''),
                 'thumbnail': info.get('thumbnail', ''),
-                'duration': int(float(info.get('duration', 0))),  # Always int
-                'formats_raw': [],
+                'duration': int(float(info.get('duration', 0))),
+                'formats': info.get('formats', []),
+                'formats_raw': info.get('formats', []),  # optional debug info
+                # Default aspect ratio fallback:
+                'width': None,
+                'height': None,
+                'aspect_ratio': None,
             }
 
-            formats = info.get('formats', [])
-            resp['formats_raw'] = formats # [Optional debug]
+            # Fetch width and height info:
+            # Priority order: from info dictionary, else from any selected highest quality stream
+            width = info.get('width')
+            height = info.get('height')
 
+            # If missing, try inspecting best video or muxed stream
+            formats = resp['formats']
+            if not width or not height:
+                # Find highest resolution format if available
+                best_format = None
+                for f in formats:
+                    if 'width' in f and 'height' in f and f.get('url'):
+                        if not best_format or f['width'] > best_format['width']:
+                            best_format = f
+                if best_format:
+                    width = best_format['width']
+                    height = best_format['height']
+
+            if width and height:
+                resp['width'] = width
+                resp['height'] = height
+                resp['aspect_ratio'] = f"{width}:{height}"
+
+            # Backend format parsing: separating out muxed, video only, audio only streams
             if platform == 'youtube':
                 audio_formats, video_formats = [], []
                 for f in formats:
-                    if not f.get('url'): continue
+                    if not f.get('url'):
+                        continue
                     size_val = f.get('filesize') or f.get('filesize_approx') or None
                     readable_size = sizeof_fmt(size_val) if size_val else "Unknown"
                     out = {
-                        'format_id': f.get('format_id',''),
-                        'format_note': f.get('format_note') or '',
-                        'extension': f.get('ext',''),
+                        'format_id': f.get('format_id', ''),
+                        'format_note': f.get('format_note', ''),
+                        'extension': f.get('ext', ''),
                         'filesize': readable_size,
                         'filesize_bytes': size_val,
                         'resolution': str(f.get('height') or f.get('format_note') or 'audio'),
@@ -86,7 +113,7 @@ def get_info():
                         'fps': f.get('fps'),
                         'url': f.get('url'),
                     }
-                    if f.get('vcodec','none') == 'none':
+                    if f.get('vcodec', 'none') == 'none':
                         audio_formats.append(out)
                     else:
                         video_formats.append(out)
@@ -96,7 +123,6 @@ def get_info():
                 resp['video_formats'] = video_formats
 
             else:
-                # ========== Non-YT: video+audio (muxed), highest video, audio separately ===========
                 best_muxed = None
                 best_video = None
                 best_audio = None
@@ -104,25 +130,24 @@ def get_info():
                 for f in formats:
                     if not f.get('url'):
                         continue
-                    # muxed (video+audio)
-                    if f.get('vcodec','none') != 'none' and f.get('acodec','none') != 'none':
-                        if not best_muxed or (f.get('height',0) or 0) > (best_muxed.get('height',0) or 0):
+                    # muxed stream (video + audio)
+                    if f.get('vcodec', 'none') != 'none' and f.get('acodec', 'none') != 'none':
+                        if not best_muxed or (f.get('height', 0) or 0) > (best_muxed.get('height', 0) or 0):
                             best_muxed = f
-                    # video-only (even mute)
-                    if f.get('vcodec','none') != 'none':
-                        if not best_video or (f.get('height',0) or 0) > (best_video.get('height',0) or 0):
+                    # video only stream (mute possible)
+                    if f.get('vcodec', 'none') != 'none':
+                        if not best_video or (f.get('height', 0) or 0) > (best_video.get('height', 0) or 0):
                             best_video = f
-                    # audio-only
-                    if f.get('acodec','none') != 'none' and f.get('vcodec','none') == 'none':
-                        if not best_audio or (f.get('abr',0) or 0) > (best_audio.get('abr',0) or 0):
+                    # audio only stream
+                    if f.get('acodec', 'none') != 'none' and f.get('vcodec', 'none') == 'none':
+                        if not best_audio or (f.get('abr', 0) or 0) > (best_audio.get('abr', 0) or 0):
                             best_audio = f
 
                 if best_muxed:
                     size_val = best_muxed.get('filesize') or best_muxed.get('filesize_approx') or None
                     resp['video_muxed'] = {
-                        'resolution': str(best_muxed.get('height', 'HD'))+"p",
-                        'format_note': best_muxed.get('format_note') or '',
-                        'extension': best_muxed.get('ext',''),
+                        'resolution': str(best_muxed.get('height', 'HD')) + "p",
+                        'extension': best_muxed.get('ext', ''),
                         'filesize': sizeof_fmt(size_val) if size_val else "Unknown",
                         'filesize_bytes': size_val,
                         'url': best_muxed.get('url'),
@@ -132,9 +157,8 @@ def get_info():
                 if best_video and (not best_muxed or best_video.get('url') != best_muxed.get('url')):
                     size_val = best_video.get('filesize') or best_video.get('filesize_approx') or None
                     resp['video_only'] = {
-                        'resolution': str(best_video.get('height', 'HD'))+"p",
-                        'format_note': best_video.get('format_note') or '',
-                        'extension': best_video.get('ext',''),
+                        'resolution': str(best_video.get('height', 'HD')) + "p",
+                        'extension': best_video.get('ext', ''),
                         'filesize': sizeof_fmt(size_val) if size_val else "Unknown",
                         'filesize_bytes': size_val,
                         'url': best_video.get('url'),
@@ -144,67 +168,69 @@ def get_info():
                 if best_audio:
                     size_val = best_audio.get('filesize') or best_audio.get('filesize_approx') or None
                     resp['audio'] = {
-                        'format_note': best_audio.get('format_note') or '',
-                        'extension': best_audio.get('ext',''),
+                        'extension': best_audio.get('ext', ''),
                         'filesize': sizeof_fmt(size_val) if size_val else "Unknown",
                         'filesize_bytes': size_val,
                         'url': best_audio.get('url'),
-                        'abr': best_audio.get('abr')
+                        'abr': best_audio.get('abr'),
                     }
 
             return jsonify(resp)
+
     except Exception as e:
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 400
 
-# ----- Cookies endpoints (unchanged) -----
+
+# Cookies upload APIs for Youtube, Instagram, Facebook, Pinterest - unchanged
 @app.route('/update_cookies/youtube', methods=['POST'])
 def update_cookies_youtube():
-    cookies_content = request.get_data(as_text=True)
-    if not cookies_content.strip():
+    cookie_content = request.get_data(as_text=True)
+    if not cookie_content.strip():
         return jsonify({'error': 'No cookie content provided'}), 400
     try:
         with open('cookies_youtube.txt', 'w', encoding='utf-8') as f:
-            f.write(cookies_content)
+            f.write(cookie_content)
         return jsonify({'status': 'YouTube cookies updated successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/update_cookies/instagram', methods=['POST'])
 def update_cookies_instagram():
-    cookies_content = request.get_data(as_text=True)
-    if not cookies_content.strip():
+    cookie_content = request.get_data(as_text=True)
+    if not cookie_content.strip():
         return jsonify({'error': 'No cookie content provided'}), 400
     try:
-        with open('cookies_insta.txt', 'w', encoding='utf-8') as f:
-            f.write(cookies_content)
+        with open('cookies_instagram.txt', 'w', encoding='utf-8') as f:
+            f.write(cookie_content)
         return jsonify({'status': 'Instagram cookies updated successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/update_cookies/facebook', methods=['POST'])
 def update_cookies_facebook():
-    cookies_content = request.get_data(as_text=True)
-    if not cookies_content.strip():
+    cookie_content = request.get_data(as_text=True)
+    if not cookie_content.strip():
         return jsonify({'error': 'No cookie content provided'}), 400
     try:
         with open('cookies_facebook.txt', 'w', encoding='utf-8') as f:
-            f.write(cookies_content)
+            f.write(cookie_content)
         return jsonify({'status': 'Facebook cookies updated successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/update_cookies/pinterest', methods=['POST'])
 def update_cookies_pinterest():
-    cookies_content = request.get_data(as_text=True)
-    if not cookies_content.strip():
+    cookie_content = request.get_data(as_text=True)
+    if not cookie_content.strip():
         return jsonify({'error': 'No cookie content provided'}), 400
     try:
         with open('cookies_pinterest.txt', 'w', encoding='utf-8') as f:
-            f.write(cookies_content)
+            f.write(cookie_content)
         return jsonify({'status': 'Pinterest cookies updated successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)
