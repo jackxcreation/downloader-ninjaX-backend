@@ -2,4 +2,5 @@ Flask==2.2.5
 flask-cors==4.0.0
 yt-dlp==2025.8.22
 gunicorn
+instaloader
 requests
