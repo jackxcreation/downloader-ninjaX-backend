@@ -6,6 +6,9 @@ from flask import Flask, request, jsonify, send_file, abort
 from flask_cors import CORS
 import yt_dlp
 
+# -- Added --
+import instaloader
+
 app = Flask(__name__)
 CORS(app)
 
@@ -176,7 +179,7 @@ def get_info():
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 400
 
-# ---- Instagram multi-image endpoint (with cookies) ----
+# ---- Instagram multi-image endpoint (yt-dlp, video/reel) ----
 
 @app.route('/api/ig_photos', methods=['POST'])
 def ig_photos():
@@ -232,6 +235,60 @@ def ig_photos():
 
     except Exception as e:
         print("[IG_PHOTOS ERROR]:", str(e))
+        return jsonify({"status": "fail", "error": str(e)}), 500
+
+# ---- NEW! Instagram photo/image endpoint (instaloader) ----
+
+@app.route('/api/ig_photo_dl', methods=['POST'])
+def ig_photo_dl():
+    try:
+        data = request.get_json()
+        url = data.get('url', '').strip()
+        if not url or "instagram.com/p/" not in url:
+            return jsonify({"status": "fail", "error": "Invalid Instagram photo URL."})
+
+        # Extract shortcode from URL
+        shortcode = url.rstrip('/').split('/')[-1]
+        L = instaloader.Instaloader(
+            download_pictures=False,
+            download_video_thumbnails=False,
+            download_videos=False,
+            quiet=True,
+            save_metadata=False,
+            max_connection_attempts=1
+        )
+        # (To enable cookies login, customize with session file if you use one)
+        # if os.path.exists("instaloader.session"):
+        #     L.load_session_from_file(username=None, filename="instaloader.session")
+
+        post = instaloader.Post.from_shortcode(L.context, shortcode)
+        photos = []
+        caption = post.caption or ""
+
+        if post.typename == 'GraphSidecar':
+            for node in post.get_sidecar_nodes():
+                if not node.is_video:
+                    photos.append({
+                        "url": node.display_url,
+                        "caption": node.caption or caption,
+                        "width": node.dimensions[0] if hasattr(node, "dimensions") else None,
+                        "height": node.dimensions[1] if hasattr(node, "dimensions") else None
+                    })
+        elif not post.is_video:
+            photos.append({
+                "url": post.url,
+                "caption": caption,
+                "width": post.dimensions[0] if hasattr(post, "dimensions") else None,
+                "height": post.dimensions[1] if hasattr(post, "dimensions") else None
+            })
+
+        if not photos:
+            return jsonify({"status": "fail", "error": "No photos found in this post"})
+
+        return jsonify({"status": "ok", "caption": caption, "photos": photos})
+
+    except Exception as e:
+        print("[IG_PHOTO_DL ERROR]:", str(e))
         return jsonify({"status": "fail", "error": str(e)}), 500
 
 @app.route('/merge', methods=['POST'])
