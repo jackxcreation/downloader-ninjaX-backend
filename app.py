@@ -6,7 +6,9 @@ from flask import Flask, request, jsonify, send_file, abort
 from flask_cors import CORS
 import yt_dlp
 import instaloader
-import re  # For better shortcode extraction
+import re
+import time
+import random
 
 app = Flask(__name__)
 CORS(app)
@@ -236,7 +238,7 @@ def ig_photos():
         print("[IG_PHOTOS ERROR]:", str(e))
         return jsonify({"status": "fail", "error": str(e)}), 500
 
-# ---- NEW! Instagram photo/image endpoint (instaloader) ----
+# ---- NEW! Ultimate IG image multi-method endpoint ----
 
 @app.route('/api/ig_photo_dl', methods=['POST'])
 def ig_photo_dl():
@@ -246,53 +248,153 @@ def ig_photo_dl():
         if not url or "instagram.com/p/" not in url:
             return jsonify({"status": "fail", "error": "Invalid Instagram photo URL."})
 
-        # -- STRONGER shortcode parse (with regex) --
         match = re.search(r"instagram\.com/p/([^/?#&]+)/?", url)
         if not match:
             return jsonify({"status": "fail", "error": "Invalid Instagram post URL or missing shortcode."})
         shortcode = match.group(1)
 
-        L = instaloader.Instaloader(
-            download_pictures=False,
-            download_video_thumbnails=False,
-            download_videos=False,
-            quiet=True,
-            save_metadata=False,
-            max_connection_attempts=1
-        )
-        # (To enable cookies login, customize with session file if you use one)
-        # if os.path.exists("instaloader.session"):
-        #     L.load_session_from_file(username=None, filename="instaloader.session")
+        user_agents = [
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Mobile/15E148 Safari/604.1',
+            'Mozilla/5.0 (Android 12; Mobile; rv:98.0) Gecko/98.0 Firefox/98.0',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 12_3_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
+        ]
 
-        post = instaloader.Post.from_shortcode(L.context, shortcode)
-        photos = []
-        caption = post.caption or ""
+        # --- METHOD 1: Instaloader ---
+        try:
+            L = instaloader.Instaloader(
+                download_pictures=False,
+                download_video_thumbnails=False,
+                download_videos=False,
+                quiet=True,
+                save_metadata=False,
+                max_connection_attempts=3
+            )
+            post = instaloader.Post.from_shortcode(L.context, shortcode)
+            photos = []
+            caption = post.caption or ""
+            if post.typename == 'GraphSidecar':
+                for node in post.get_sidecar_nodes():
+                    if not node.is_video:
+                        photos.append({
+                            "url": node.display_url,
+                            "caption": caption,
+                            "width": getattr(node, 'dimensions', [1080, 1080])[0],
+                            "height": getattr(node, 'dimensions', [1080, 1080])[1],
+                            "ext": "jpg"
+                        })
+            elif not post.is_video:
+                photos.append({
+                    "url": post.url,
+                    "caption": caption,
+                    "width": getattr(post, 'dimensions', [1080, 1080])[0],
+                    "height": getattr(post, 'dimensions', [1080, 1080])[1],
+                    "ext": "jpg"
+                })
+            if photos:
+                return jsonify({"status": "ok", "caption": caption, "photos": photos, "method": "instaloader"})
+        except Exception as e:
+            print(f"[METHOD 1 FAILED] Instaloader: {str(e)}")
 
-        if post.typename == 'GraphSidecar':
-            for node in post.get_sidecar_nodes():
-                if not node.is_video:
-                    photos.append({
-                        "url": node.display_url,
-                        "caption": node.caption or caption,
-                        "width": node.dimensions[0] if hasattr(node, "dimensions") else None,
-                        "height": node.dimensions[1] if hasattr(node, "dimensions") else None
-                    })
-        elif not post.is_video:
-            photos.append({
-                "url": post.url,
-                "caption": caption,
-                "width": post.dimensions[0] if hasattr(post, "dimensions") else None,
-                "height": post.dimensions[1] if hasattr(post, "dimensions") else None
-            })
+        # --- METHOD 2: Scraping ---
+        for ua_index, user_agent in enumerate(user_agents):
+            try:
+                session = requests.Session()
+                headers = {
+                    'User-Agent': user_agent,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive'
+                }
+                session.headers.update(headers)
 
-        if not photos:
-            return jsonify({"status": "fail", "error": "No photos found in this post"})
+                to_try_urls = [
+                    url,
+                    url.replace('www.', ''),
+                    f"https://www.instagram.com/p/{shortcode}/?hl=en",
+                    f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis"
+                ]
 
-        return jsonify({"status": "ok", "caption": caption, "photos": photos})
+                for test_url in to_try_urls:
+                    response = session.get(test_url, timeout=10, allow_redirects=True)
+                    if response.status_code == 200:
+                        content = response.text
+                        image_patterns = [
+                            r'"display_url":"([^"]+)"',
+                            r'<meta property="og:image" content="([^"]+)"',
+                            r'"src":"([^"]*cdninstagram[^"]+)"'
+                        ]
+                        photos = []
+                        found_urls = set()
+                        for pattern in image_patterns:
+                            matches = re.findall(pattern, content)
+                            for match in matches:
+                                url_img = match.encode('utf-8').decode('unicode_escape').replace('\\u0026', '&').replace('\\/', '/')
+                                if url_img not in found_urls and url_img.startswith('http'):
+                                    found_urls.add(url_img)
+                                    photos.append({
+                                        "url": url_img,
+                                        "caption": "",
+                                        "width": 1080,
+                                        "height": 1080,
+                                        "ext": url_img.split('.')[-1].split('?')[0] if '.' in url_img else 'jpg'
+                                    })
+                        if photos:
+                            return jsonify({"status": "ok", "caption": "", "photos": photos, "method": f"scraping_ua_{ua_index+1}"})
+            except Exception as e:
+                continue
 
+        # --- METHOD 3: yt-dlp fallback ---
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'forcejson': True,
+                'noplaylist': True,
+                'ignoreerrors': True,
+                'user_agent': random.choice(user_agents)
+            }
+            cookie_file = 'cookies_insta.txt'
+            if os.path.exists(cookie_file):
+                ydl_opts['cookiefile'] = cookie_file
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                photos = []
+                if info:
+                    if "entries" in info and isinstance(info["entries"], list):
+                        for entry in info["entries"]:
+                            if entry.get("url") and any(ext in entry.get("url", "") for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                                photos.append({
+                                    "url": entry.get("url"),
+                                    "caption": entry.get("description", ""),
+                                    "width": entry.get("width", 1080),
+                                    "height": entry.get("height", 1080),
+                                    "ext": entry.get("ext", "jpg")
+                                })
+                    elif info.get("url") and any(ext in info.get("url", "") for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                        photos.append({
+                            "url": info.get("url"),
+                            "caption": info.get("description", ""),
+                            "width": info.get("width", 1080),
+                            "height": info.get("height", 1080),
+                            "ext": info.get("ext", "jpg")
+                        })
+                if photos:
+                    return jsonify({"status": "ok", "caption": photos[0].get('caption', ''), "photos": photos, "method": "yt-dlp"})
+        except Exception as e:
+            print(f"[METHOD 3 FAILED] yt-dlp: {str(e)}")
+
+        # Total fail
+        return jsonify({
+            "status": "fail",
+            "error": "Instagram has blocked all extraction methods for this post. This might be a private post, story, or Instagram updated their anti-scraping measures."
+        })
     except Exception as e:
-        print("[IG_PHOTO_DL ERROR]:", str(e))
-        return jsonify({"status": "fail", "error": str(e)}), 500
+        print(f"[MASTER ERROR]: {str(e)}")
+        return jsonify({"status": "fail", "error": f"Unexpected system error: {str(e)}"}), 500
 
 @app.route('/merge', methods=['POST'])
 def merge_video_audio():
