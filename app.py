@@ -176,6 +176,59 @@ def get_info():
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 400
 
+# ---- New Instagram photos multi-image endpoint ----
+
+@app.route('/api/ig_photos', methods=['POST'])
+def ig_photos():
+    try:
+        data = request.get_json()
+        url = data.get('url', '').strip()
+        if not url or "instagram.com" not in url:
+            return jsonify({"status": "fail", "error": "Invalid Instagram URL."})
+
+        ydl_opts = {
+            'quiet': True,
+            'skip_download': True,
+            'forcejson': True,
+            'noplaylist': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        photos = []
+        caption = ""
+
+        if "entries" in info and isinstance(info["entries"], list):
+            for entry in info["entries"]:
+                if entry.get("ext") in ("jpg", "jpeg", "png", "webp"):
+                    photos.append({
+                        "url": entry.get("url"),
+                        "caption": entry.get("description", ""),
+                        "ext": entry.get("ext"),
+                        "size": entry.get("filesize_approx"),
+                        "width": entry.get("width", 0),
+                        "height": entry.get("height", 0)
+                    })
+                    if not caption:
+                        caption = entry.get("description", "")
+        elif info.get("ext") in ("jpg", "jpeg", "png", "webp"):
+            photos.append({
+                "url": info.get("url"),
+                "caption": info.get("description", ""),
+                "ext": info.get("ext"),
+                "size": info.get("filesize_approx"),
+                "width": info.get("width", 0),
+                "height": info.get("height", 0)
+            })
+            caption = info.get("description", "")
+
+        if not photos:
+            return jsonify({"status": "fail", "error": "No photos found in this post"})
+
+        return jsonify({"status": "ok", "caption": caption, "photos": photos})
+
+    except Exception as e:
+        return jsonify({"status": "fail", "error": str(e)}), 500
 
 @app.route('/merge', methods=['POST'])
 def merge_video_audio():
@@ -183,7 +236,6 @@ def merge_video_audio():
         video_url = request.json.get('video_url')
         audio_url = request.json.get('audio_url')
 
-        # Validate URLs for safety
         for link in (video_url, audio_url):
             if not (link and link.startswith('http')):
                 return jsonify({'error': 'Invalid URL'}), 400
@@ -193,21 +245,18 @@ def merge_video_audio():
             audio_path = os.path.join(td, 'audio.m4a')
             output_path = os.path.join(td, 'merged.mp4')
 
-            # Download video file
             r = requests.get(video_url, stream=True)
             with open(video_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
 
-            # Download audio file
             r = requests.get(audio_url, stream=True)
             with open(audio_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
 
-            # Merge using ffmpeg (copy codec)
             cmd = [
                 'ffmpeg', '-y',
                 '-i', video_path,
@@ -220,11 +269,9 @@ def merge_video_audio():
             if result.returncode != 0:
                 return jsonify({'error': 'ffmpeg failed to merge'}), 500
 
-            # Send merged file then temp deletes automatically
             return send_file(output_path, as_attachment=True, download_name='merged.mp4')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
 
 @app.route('/update_cookies/<platform>', methods=['POST'])
 def update_cookies(platform):
@@ -241,7 +288,5 @@ def update_cookies(platform):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000, debug=True)
-
