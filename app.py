@@ -176,7 +176,7 @@ def get_info():
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 400
 
-# ---- New Instagram photos multi-image endpoint ----
+# ---- Instagram multi-image endpoint (with cookies) ----
 
 @app.route('/api/ig_photos', methods=['POST'])
 def ig_photos():
@@ -192,6 +192,9 @@ def ig_photos():
             'forcejson': True,
             'noplaylist': True,
         }
+        cookie_file = 'cookies_insta.txt'
+        if cookie_file and os.path.exists(cookie_file):
+            ydl_opts['cookiefile'] = cookie_file
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
@@ -228,6 +231,7 @@ def ig_photos():
         return jsonify({"status": "ok", "caption": caption, "photos": photos})
 
     except Exception as e:
+        print("[IG_PHOTOS ERROR]:", str(e))
         return jsonify({"status": "fail", "error": str(e)}), 500
 
 @app.route('/merge', methods=['POST'])
