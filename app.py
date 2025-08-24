@@ -9,26 +9,23 @@ import yt_dlp
 app = Flask(__name__)
 CORS(app)
 
-# Ye function size ko readable format mein convert karta hai
 def sizeof_fmt(num, suffix="B"):
     try:
         num = int(num)
     except:
         return "Unknown"
     for unit in ["","K","M","G","T"]:
-        if abs(num) < 1024.0:
+        if abs(num) < 1024:
             return f"{num:.2f} {unit}{suffix}"
-        num /= 1024.0
+        num /= 1024
     return f"{num:.2f} P{suffix}"
 
-# Ye endpoint main info fetch karta hai tumhare video link ka
 @app.route('/get_info', methods=['POST'])
 def get_info():
     video_url = request.json.get('url')
     if not video_url:
         return jsonify({'error': 'No URL provided.'}), 400
 
-    # Platform detect kar le
     if "youtube.com" in video_url or "youtu.be" in video_url:
         platform = 'youtube'
         cookie_file = 'cookies_youtube.txt'
@@ -67,12 +64,12 @@ def get_info():
                 'thumbnail': info.get('thumbnail', ''),
                 'duration': int(info.get('duration') or 0),
                 'formats': info.get('formats', []),
+                'formats_raw': info.get('formats', []),
                 'width': None,
                 'height': None,
                 'aspect_ratio': None
             }
 
-            # Width aur height dhundho
             width = info.get('width')
             height = info.get('height')
             formats = resp['formats']
@@ -92,7 +89,6 @@ def get_info():
                 resp['height'] = height
                 resp['aspect_ratio'] = f"{width}:{height}"
 
-            # Formats ko audio aur video buckets mein split kar lo
             if platform == 'youtube':
                 audio_formats = []
                 video_formats = []
@@ -106,10 +102,13 @@ def get_info():
                         'format_note': f.get('format_note', ''),
                         'extension': f.get('ext', ''),
                         'filesize': readable_size,
+                        'filesize_bytes': size_val,
                         'resolution': str(f.get('height') or f.get('format_note') or 'audio'),
                         'acodec': f.get('acodec'),
                         'vcodec': f.get('vcodec'),
                         'abr': f.get('abr'),
+                        'tbr': f.get('tbr'),
+                        'fps': f.get('fps'),
                         'url': f.get('url'),
                     }
                     if f.get('vcodec', 'none') == 'none':
@@ -121,7 +120,6 @@ def get_info():
                 resp['audio_formats'] = audio_formats
                 resp['video_formats'] = video_formats
             else:
-                # Non-yt platforms ke liye
                 best_muxed = None
                 best_video = None
                 best_audio = None
@@ -130,100 +128,119 @@ def get_info():
                     if not f.get('url'):
                         continue
                     if f.get('vcodec', 'none') != 'none' and f.get('acodec', 'none') != 'none':
-                        if not best_muxed or (f.get('height', 0) or 0) > (best_muxed.get('height', 0) or 0):
+                        if not best_muxed or (f.get('height', 0) or 0) > (best_muxed['height'] or 0):
                             best_muxed = f
                     if f.get('vcodec', 'none') != 'none':
-                        if not best_video or (f.get('height', 0) or 0) > (best_video.get('height', 0) or 0):
+                        if not best_video or (f.get('height', 0) or 0) > (best_video['height'] or 0):
                             best_video = f
                     if f.get('acodec', 'none') != 'none' and f.get('vcodec', 'none') == 'none':
-                        if not best_audio or (f.get('abr', 0) or 0) > (best_audio.get('abr', 0) or 0):
+                        if not best_audio or (f.get('abr', 0) or 0) > (best_audio['abr'] or 0):
                             best_audio = f
 
                 if best_muxed:
                     size_val = best_muxed.get('filesize') or best_muxed.get('filesize_approx')
                     resp['video_muxed'] = {
-                        'resolution': str(best_muxed.get('height', 'HD')) + "p",
-                        'extension': best_muxed.get('ext', ''),
+                        'resolution': str(best_muxed['height']) + "p" if best_muxed['height'] else "HD",
+                        'extension': best_muxed.get('ext'),
                         'filesize': sizeof_fmt(size_val) if size_val else "Unknown",
+                        'filesize_bytes': size_val,
                         'url': best_muxed.get('url'),
                         'tbr': best_muxed.get('tbr'),
                         'fps': best_muxed.get('fps'),
                     }
-                if best_video and (not best_muxed or best_video.get('url') != best_muxed.get('url')):
+
+                if best_video and (not best_muxed or best_video['url'] != best_muxed['url']):
                     size_val = best_video.get('filesize') or best_video.get('filesize_approx')
                     resp['video_only'] = {
-                        'resolution': str(best_video.get('height', 'HD')) + "p",
-                        'extension': best_video.get('ext', ''),
+                        'resolution': str(best_video['height']) + "p" if best_video['height'] else "HD",
+                        'extension': best_video.get('ext'),
                         'filesize': sizeof_fmt(size_val) if size_val else "Unknown",
+                        'filesize_bytes': size_val,
                         'url': best_video.get('url'),
                         'tbr': best_video.get('tbr'),
                         'fps': best_video.get('fps'),
                     }
+
                 if best_audio:
                     size_val = best_audio.get('filesize') or best_audio.get('filesize_approx')
                     resp['audio'] = {
-                        'extension': best_audio.get('ext', ''),
+                        'extension': best_audio.get('ext'),
                         'filesize': sizeof_fmt(size_val) if size_val else "Unknown",
+                        'filesize_bytes': size_val,
                         'url': best_audio.get('url'),
                         'abr': best_audio.get('abr'),
                     }
-            return jsonify(resp)
 
+            return jsonify(resp)
     except Exception as e:
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 400
 
 
-# Cookie upload routes (Jaise tha waise hi baaki)
-# Aapke cookies management ke liye wahi handle kar lenge
-
-@app.route('/update_cookies/youtube', methods=['POST'])
-def update_cookies_youtube():
-    cookies = request.data.decode('utf-8')
-    if not cookies.strip():
-        return jsonify({"error": "No cookie content provided"}), 400
+@app.route('/merge', methods=['POST'])
+def merge_video_audio():
     try:
-        with open("cookies_youtube.txt", "w", encoding='utf-8') as f:
-            f.write(cookies)
-        return jsonify({"status": "YouTube cookies updated successfully"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        video_url = request.json.get('video_url')
+        audio_url = request.json.get('audio_url')
 
-@app.route('/update_cookies/instagram', methods=['POST'])
-def update_cookies_instagram():
-    cookies = request.data.decode('utf-8')
-    if not cookies.strip():
-        return jsonify({"error": "No cookie content provided"}), 400
-    try:
-        with open("cookies_insta.txt", "w", encoding='utf-8') as f:
-            f.write(cookies)
-        return jsonify({"status": "Instagram cookies updated successfully"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Validate URLs for safety
+        for link in (video_url, audio_url):
+            if not (link and link.startswith('http')):
+                return jsonify({'error': 'Invalid URL'}), 400
 
-@app.route('/update_cookies/facebook', methods=['POST'])
-def update_cookies_facebook():
-    cookies = request.data.decode('utf-8')
-    if not cookies.strip():
-        return jsonify({"error": "No cookie content provided"}), 400
-    try:
-        with open("cookies_facebook.txt", "w", encoding='utf-8') as f:
-            f.write(cookies)
-        return jsonify({"status": "Facebook cookies updated successfully"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        with tempfile.TemporaryDirectory() as td:
+            video_path = os.path.join(td, 'video.mp4')
+            audio_path = os.path.join(td, 'audio.m4a')
+            output_path = os.path.join(td, 'merged.mp4')
 
-@app.route('/update_cookies/pinterest', methods=['POST'])
-def update_cookies_pinterest():
-    cookies = request.data.decode('utf-8')
-    if not cookies.strip():
-        return jsonify({"error": "No cookie content provided"}), 400
-    try:
-        with open("cookies_pinterest.txt", "w", encoding='utf-8') as f:
-            f.write(cookies)
-        return jsonify({"status": "Pinterest cookies updated successfully"})
+            # Download video file
+            r = requests.get(video_url, stream=True)
+            with open(video_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            # Download audio file
+            r = requests.get(audio_url, stream=True)
+            with open(audio_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            # Merge using ffmpeg (copy codec)
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-i', audio_path,
+                '-c', 'copy',
+                '-movflags', 'faststart',
+                output_path
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                return jsonify({'error': 'ffmpeg failed to merge'}), 500
+
+            # Send merged file then temp deletes automatically
+            return send_file(output_path, as_attachment=True, download_name='merged.mp4')
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/update_cookies/<platform>', methods=['POST'])
+def update_cookies(platform):
+    if platform not in ['youtube', 'insta', 'facebook', 'pinterest']:
+        return jsonify({'error': 'Invalid platform'}), 400
+    path = f'{platform}_cookies.txt'
+    content = request.data.decode('utf-8')
+    if not content.strip():
+        return jsonify({'error': 'No cookie content provided'}), 400
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return jsonify({'status': f'{platform} cookies updated successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)
