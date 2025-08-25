@@ -26,6 +26,20 @@ def get_info():
     if not video_url:
         return jsonify({'error': 'No URL provided.'}), 400
 
+    # --- YT Shorts and youtu.be fix: Put BEFORE yt-dlp extract_info! ---
+    if "youtube.com/shorts/" in video_url:
+        import re
+        match = re.search(r'youtube\.com/shorts/([a-zA-Z0-9_-]+)', video_url)
+        if match:
+            video_id = match.group(1)
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+    elif "youtu.be/" in video_url:
+        import re
+        match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', video_url)
+        if match:
+            video_id = match.group(1)
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+
     if "youtube.com" in video_url or "youtu.be" in video_url:
         platform = 'youtube'
         cookie_file = 'cookies_youtube.txt'
