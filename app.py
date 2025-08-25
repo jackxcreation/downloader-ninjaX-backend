@@ -2,7 +2,7 @@ import os
 import tempfile
 import subprocess
 import requests
-from flask import Flask, request, jsonify, send_file, abort
+from flask import Flask, request, jsonify, send_file, abort, Response
 from flask_cors import CORS
 import yt_dlp
 
@@ -189,6 +189,18 @@ def get_info():
     except Exception as e:
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 400
+
+@app.route('/proxy_download')
+def proxy_download():
+    file_url = request.args.get('url')
+    if not file_url or not file_url.startswith('http'):
+        return abort(400)
+    r = requests.get(file_url, stream=True)
+    def generate():
+        for chunk in r.iter_content(chunk_size=8192):
+            yield chunk
+    # You may want to set the headers for content-type and attachment
+    return Response(generate(), content_type=r.headers.get('Content-Type', 'application/octet-stream'))
 
 @app.route('/merge', methods=['POST'])
 def merge_video_audio():
