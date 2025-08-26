@@ -190,6 +190,74 @@ def get_info():
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 400
 
+# DIRECT DOWNLOAD ROUTE (Backend handles full download)
+@app.route('/download_file', methods=['POST'])
+def download_file():
+    try:
+        data = request.json
+        file_url = data.get('url')
+        file_type = data.get('type', 'video')
+        filename = data.get('filename', 'download.mp4')
+        
+        if not file_url:
+            return jsonify({'error': 'No URL provided'}), 400
+            
+        # Download file on server
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(file_url, headers=headers, stream=True)
+        if response.status_code != 200:
+            return jsonify({'error': 'Failed to fetch file'}), 400
+            
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{filename.split(".")[-1]}') as tmp_file:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    tmp_file.write(chunk)
+            tmp_file_path = tmp_file.name
+            
+        # Send file to user and cleanup
+        def remove_file(response):
+            try:
+                os.unlink(tmp_file_path)
+            except Exception:
+                pass
+            return response
+            
+        return send_file(tmp_file_path, as_attachment=True, download_name=filename)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# STREAMING PREVIEW ROUTE
+@app.route('/stream_media')
+def stream_media():
+    try:
+        file_url = request.args.get('url')
+        if not file_url:
+            return abort(400)
+            
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(file_url, headers=headers, stream=True)
+        if response.status_code != 200:
+            return abort(404)
+            
+        def generate():
+            for chunk in response.iter_content(chunk_size=8192):
+                yield chunk
+                
+        return Response(generate(), 
+                       content_type=response.headers.get('Content-Type', 'video/mp4'),
+                       headers={'Accept-Ranges': 'bytes'})
+                       
+    except Exception:
+        return abort(500)
+
 @app.route('/proxy_download')
 def proxy_download():
     file_url = request.args.get('url')
@@ -199,7 +267,6 @@ def proxy_download():
     def generate():
         for chunk in r.iter_content(chunk_size=8192):
             yield chunk
-    # You may want to set the headers for content-type and attachment
     return Response(generate(), content_type=r.headers.get('Content-Type', 'application/octet-stream'))
 
 @app.route('/proxy_media')
