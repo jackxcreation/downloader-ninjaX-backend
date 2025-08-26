@@ -5,6 +5,7 @@ import requests
 from flask import Flask, request, jsonify, send_file, abort, Response
 from flask_cors import CORS
 import yt_dlp
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -62,7 +63,7 @@ def get_info():
         'noplaylist': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
     }
-    if cookie_file:
+    if cookie_file and os.path.exists(cookie_file):
         ydl_opts['cookiefile'] = cookie_file
 
     try:
@@ -190,7 +191,7 @@ def get_info():
         print(f"Error: {e}")
         return jsonify({'error': str(e)}), 400
 
-# DIRECT DOWNLOAD ROUTE (Backend handles full download)
+# DIRECT DOWNLOAD ROUTE (Backend handles full download) - FIXED VERSION
 @app.route('/download_file', methods=['POST'])
 def download_file():
     try:
@@ -199,63 +200,140 @@ def download_file():
         file_type = data.get('type', 'video')
         filename = data.get('filename', 'download.mp4')
         
+        print(f"Download request - URL: {file_url[:100]}...")
+        print(f"Filename: {filename}")
+        
         if not file_url:
             return jsonify({'error': 'No URL provided'}), 400
             
-        # Download file on server
+        # Enhanced headers with more realistic browser signature
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'identity',
+            'Connection': 'keep-alive',
+            'Referer': 'https://www.youtube.com/'
         }
         
-        response = requests.get(file_url, headers=headers, stream=True)
+        # Add timeout and better error handling
+        print("Starting file download from source...")
+        response = requests.get(file_url, headers=headers, stream=True, timeout=30)
+        print(f"Response status: {response.status_code}")
+        
         if response.status_code != 200:
-            return jsonify({'error': 'Failed to fetch file'}), 400
+            print(f"Failed to fetch file. Status: {response.status_code}")
+            return jsonify({'error': f'Failed to fetch file. Status: {response.status_code}'}), 400
             
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{filename.split(".")[-1]}') as tmp_file:
+        # Get content length for progress tracking
+        total_size = response.headers.get('content-length')
+        if total_size:
+            print(f"File size: {sizeof_fmt(int(total_size))}")
+        
+        # Create temporary file with proper extension
+        file_ext = filename.split('.')[-1] if '.' in filename else 'mp4'
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_ext}')
+        tmp_file_path = tmp_file.name
+        
+        print("Writing file to temporary location...")
+        try:
+            downloaded_size = 0
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     tmp_file.write(chunk)
-            tmp_file_path = tmp_file.name
+                    downloaded_size += len(chunk)
+            tmp_file.close()
             
-        # Send file to user and cleanup
-        def remove_file(response):
-            try:
+            print(f"Download completed. Size: {sizeof_fmt(downloaded_size)}")
+            
+            # Send file and cleanup after sending
+            def cleanup_file():
+                try:
+                    if os.path.exists(tmp_file_path):
+                        os.unlink(tmp_file_path)
+                        print("Temporary file cleaned up")
+                except Exception as e:
+                    print(f"Cleanup error: {e}")
+            
+            # Schedule cleanup after response is sent
+            response_obj = send_file(
+                tmp_file_path, 
+                as_attachment=True, 
+                download_name=filename,
+                mimetype='application/octet-stream'
+            )
+            
+            # Cleanup will happen after the response is sent
+            import atexit
+            atexit.register(cleanup_file)
+            
+            return response_obj
+            
+        except Exception as e:
+            # Cleanup on error
+            tmp_file.close()
+            if os.path.exists(tmp_file_path):
                 os.unlink(tmp_file_path)
-            except Exception:
-                pass
-            return response
-            
-        return send_file(tmp_file_path, as_attachment=True, download_name=filename)
+            raise e
         
+    except requests.exceptions.Timeout:
+        print("Request timeout")
+        return jsonify({'error': 'Request timeout - file too large or slow connection'}), 408
+    except requests.exceptions.ConnectionError:
+        print("Connection error")
+        return jsonify({'error': 'Connection error - unable to reach file source'}), 503
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"Download error: {str(e)}")
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
 
-# STREAMING PREVIEW ROUTE
+# STREAMING PREVIEW ROUTE - ENHANCED VERSION
 @app.route('/stream_media')
 def stream_media():
     try:
         file_url = request.args.get('url')
         if not file_url:
             return abort(400)
+        
+        print(f"Streaming request for: {file_url[:100]}...")
             
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Connection': 'keep-alive',
+            'Referer': 'https://www.youtube.com/'
         }
         
-        response = requests.get(file_url, headers=headers, stream=True)
+        response = requests.get(file_url, headers=headers, stream=True, timeout=10)
+        print(f"Stream response status: {response.status_code}")
+        
         if response.status_code != 200:
-            return abort(404)
+            print(f"Stream failed with status: {response.status_code}")
+            return abort(response.status_code)
             
         def generate():
-            for chunk in response.iter_content(chunk_size=8192):
-                yield chunk
+            try:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+            except Exception as e:
+                print(f"Streaming error: {e}")
+                return
                 
-        return Response(generate(), 
-                       content_type=response.headers.get('Content-Type', 'video/mp4'),
-                       headers={'Accept-Ranges': 'bytes'})
+        content_type = response.headers.get('Content-Type', 'video/mp4')
+        print(f"Streaming content type: {content_type}")
+        
+        return Response(
+            generate(), 
+            content_type=content_type,
+            headers={
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'no-cache'
+            }
+        )
                        
-    except Exception:
+    except Exception as e:
+        print(f"Stream media error: {e}")
         return abort(500)
 
 @app.route('/proxy_download')
@@ -263,23 +341,49 @@ def proxy_download():
     file_url = request.args.get('url')
     if not file_url or not file_url.startswith('http'):
         return abort(400)
-    r = requests.get(file_url, stream=True)
-    def generate():
-        for chunk in r.iter_content(chunk_size=8192):
-            yield chunk
-    return Response(generate(), content_type=r.headers.get('Content-Type', 'application/octet-stream'))
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    try:
+        r = requests.get(file_url, stream=True, headers=headers, timeout=30)
+        if r.status_code != 200:
+            return abort(r.status_code)
+        
+        def generate():
+            for chunk in r.iter_content(chunk_size=8192):
+                yield chunk
+                
+        return Response(generate(), content_type=r.headers.get('Content-Type', 'application/octet-stream'))
+    except Exception as e:
+        print(f"Proxy download error: {e}")
+        return abort(500)
 
 @app.route('/proxy_media')
 def proxy_media():
     file_url = request.args.get('url')
     if not file_url or not file_url.startswith('http'):
         return abort(400)
-    r = requests.get(file_url, stream=True, headers={"User-Agent": "Mozilla/5.0"})
-    def generate():
-        for chunk in r.iter_content(chunk_size=8192):
-            yield chunk
-    content_type = r.headers.get('Content-Type', 'application/octet-stream')
-    return Response(generate(), content_type=content_type)
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    try:
+        r = requests.get(file_url, stream=True, headers=headers, timeout=15)
+        if r.status_code != 200:
+            return abort(r.status_code)
+        
+        def generate():
+            for chunk in r.iter_content(chunk_size=8192):
+                yield chunk
+                
+        content_type = r.headers.get('Content-Type', 'application/octet-stream')
+        return Response(generate(), content_type=content_type)
+    except Exception as e:
+        print(f"Proxy media error: {e}")
+        return abort(500)
 
 @app.route('/merge', methods=['POST'])
 def merge_video_audio():
@@ -287,27 +391,43 @@ def merge_video_audio():
         video_url = request.json.get('video_url')
         audio_url = request.json.get('audio_url')
 
+        print(f"Merge request - Video: {video_url[:100] if video_url else 'None'}...")
+        print(f"Merge request - Audio: {audio_url[:100] if audio_url else 'None'}...")
+
         for link in (video_url, audio_url):
             if not (link and link.startswith('http')):
                 return jsonify({'error': 'Invalid URL'}), 400
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
 
         with tempfile.TemporaryDirectory() as td:
             video_path = os.path.join(td, 'video.mp4')
             audio_path = os.path.join(td, 'audio.m4a')
             output_path = os.path.join(td, 'merged.mp4')
 
-            r = requests.get(video_url, stream=True)
+            print("Downloading video stream...")
+            r = requests.get(video_url, stream=True, headers=headers, timeout=30)
+            if r.status_code != 200:
+                return jsonify({'error': f'Failed to download video: {r.status_code}'}), 400
+                
             with open(video_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
 
-            r = requests.get(audio_url, stream=True)
+            print("Downloading audio stream...")
+            r = requests.get(audio_url, stream=True, headers=headers, timeout=30)
+            if r.status_code != 200:
+                return jsonify({'error': f'Failed to download audio: {r.status_code}'}), 400
+                
             with open(audio_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
 
+            print("Starting FFmpeg merge...")
             cmd = [
                 'ffmpeg', '-y',
                 '-i', video_path,
@@ -317,18 +437,25 @@ def merge_video_audio():
                 output_path
             ]
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
             if result.returncode != 0:
+                print(f"FFmpeg error: {result.stderr.decode()}")
                 return jsonify({'error': 'ffmpeg failed to merge'}), 500
 
+            print("Merge completed successfully")
             return send_file(output_path, as_attachment=True, download_name='merged.mp4')
+            
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Merge timeout - files too large'}), 408
     except Exception as e:
+        print(f"Merge error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/update_cookies/<platform>', methods=['POST'])
 def update_cookies(platform):
     if platform not in ['youtube', 'insta', 'facebook', 'pinterest']:
         return jsonify({'error': 'Invalid platform'}), 400
-    path = f'{platform}_cookies.txt'
+    path = f'cookies_{platform}.txt'
     content = request.data.decode('utf-8')
     if not content.strip():
         return jsonify({'error': 'No cookie content provided'}), 400
