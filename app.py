@@ -202,6 +202,18 @@ def proxy_download():
     # You may want to set the headers for content-type and attachment
     return Response(generate(), content_type=r.headers.get('Content-Type', 'application/octet-stream'))
 
+@app.route('/proxy_media')
+def proxy_media():
+    file_url = request.args.get('url')
+    if not file_url or not file_url.startswith('http'):
+        return abort(400)
+    r = requests.get(file_url, stream=True, headers={"User-Agent": "Mozilla/5.0"})
+    def generate():
+        for chunk in r.iter_content(chunk_size=8192):
+            yield chunk
+    content_type = r.headers.get('Content-Type', 'application/octet-stream')
+    return Response(generate(), content_type=content_type)
+
 @app.route('/merge', methods=['POST'])
 def merge_video_audio():
     try:
