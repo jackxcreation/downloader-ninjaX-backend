@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.git/
+.gitignore
+README.md
+Dockerfile
+.dockerignore
+node_modules/
+.vscode/
+.idea/
+*.log
+cookies_*.txt
+temp/
