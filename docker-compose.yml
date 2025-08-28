@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  seal-downloader:
+    build: .
+    ports:
+      - "10000:10000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PORT=10000
+    volumes:
+      - ./cookies:/app/cookies
+      - ./temp:/app/temp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
