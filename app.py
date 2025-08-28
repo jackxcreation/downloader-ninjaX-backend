@@ -112,13 +112,13 @@ def get_info():
     # Convert shorts/youtu.be to standard format
     if "youtube.com/shorts/" in video_url:
         import re
-        match = re.search(r'youtube\.com/shorts/([a-zA-Z0-9_-]+)', video_url)
+        match = re.search(r'youtube.com/shorts/([a-zA-Z0-9_-]+)', video_url)
         if match:
             video_id = match.group(1)
             video_url = f"https://www.youtube.com/watch?v={video_id}"
     elif "youtu.be/" in video_url:
         import re
-        match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', video_url)
+        match = re.search(r'youtu.be/([a-zA-Z0-9_-]+)', video_url)
         if match:
             video_id = match.group(1)
             video_url = f"https://www.youtube.com/watch?v={video_id}"
